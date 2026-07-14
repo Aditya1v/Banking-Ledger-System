@@ -145,6 +145,72 @@ async function createTransaction(req, res){
 }
 
 
+async function createInitialFundsTransaction(req, res){
+  const {toAccount, amount, idempotencyKey} = req.body
+
+  if(!toAccount || !amount || !idempotencyKey){
+    return res.status(400).json({
+      message: "Missing required fields in request body"
+    })
+  }
+  const toUserAccount = await accountModel.findOne({
+    _id:toAccount
+  })
+  if(!toUserAccount){
+    return res.status(400).json({
+      message: "Receiver account not found"
+    })
+  }
+
+  const fromUserAccount = await accountModel.findOne({
+    systemUser: true,
+    user: req.user._id
+  })
+
+  if(!fromUserAccount){
+    return res.status(400).json({
+      message: "System user account not found"
+    })
+  }
+
+  const session = await mongoose.startSession()
+  session.startTransaction()
+
+  const transaction = await transactionModel.create({
+    fromAccount: fromUserAccount._id,
+    toAccount,
+    amount,
+    idempotencyKey,
+    status: "PENDING"
+  }, {session})
+
+  const debitLedgerEntry = await ledgerModel.create({
+    account: fromUserAccount._id,
+    transaction: transaction._id,
+    type: "DEBIT",
+    amount: amount
+  }, {session})
+
+  const creditLedgerEntry = await ledgerModel.create({
+    account: toAccount,
+    transaction: transaction._id,
+    type: "CREDIT",
+    amount: amount
+  }, {session})
+
+  transaction.status = "COMPLETED"
+  await transaction.save({session})
+
+  await session.commitTransaction()
+  session.endSession()
+
+  return res.status(201).json({
+    message: "Initial funds transaction completed successfully",
+    transaction: transaction
+  })  
+
+}
 module.exports = {
-  createTransaction
+  createTransaction,
+  createInitialFundsTransaction
 }
